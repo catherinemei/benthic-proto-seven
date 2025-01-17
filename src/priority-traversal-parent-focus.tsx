@@ -9,6 +9,7 @@ import {
 import {
   TraversalOutputProps,
   HypergraphNodeProps,
+  RelationNode,
 } from "./priority-traversal-types";
 
 /**
@@ -31,6 +32,85 @@ export function TraversalOutputComponentKeyboardParentFocus(
     new Map()
   );
 
+  // Keep track of list of nodes to show on screen
+  const [displayedNodes, setDisplayedNodes] = createSignal<RelationNode[]>([
+    props.nodeGraph[0],
+  ]);
+
+  const handleNodeClick = (oldId: string, newId: string) => {
+    // Possibilities for click interaction on non-parent list
+    // 1. Click on an adjacent node (sibling), then focus moves to that sibling node; update history to be on that node
+    // 2. Click on belongs to - goes to list of parent nodes in same format
+    // 3. Click on contains - goes to first child of current node
+
+    if (oldId === "-1" || newId === "-1" || !oldId || !newId) {
+      return;
+    }
+
+    const nodeSiblings = findSiblingOfFocusedParent(oldId);
+    let finalFocusedNode = newId;
+
+    if (nodeSiblings.includes(newId)) {
+      // Case 1
+      const curHistory = history();
+      curHistory.pop();
+      setHistory([...curHistory, newId]);
+    } else if (newId === `node-${oldId}-belongsto`) {
+      // Case 2
+      const oldNodeParentIds = props.nodeGraph[oldId].parents;
+
+      // check for the case where this is at the root
+      // if at root, then do nothing
+      if (oldNodeParentIds.length === 0) {
+        return;
+      }
+
+      const oldNodeParents = oldNodeParentIds.map(
+        (parentId) => props.nodeGraph[parentId]
+      );
+      setDisplayedNodes(oldNodeParents);
+
+      // pop last node off history since going up a layer
+      const curHistory = history();
+      curHistory.pop();
+      setHistory([...curHistory]);
+
+      finalFocusedNode = oldNodeParentIds[0];
+    } else if (newId === `node-${oldId}-contains`) {
+      // Case 3
+      const childrenNodeIds = props.nodeGraph[oldId].children;
+
+      // no children, then do nothing
+      if (childrenNodeIds.length === 0) {
+        return;
+      }
+
+      // else navigate to children node and display all children of current node
+      setDisplayedNodes(
+        childrenNodeIds.map((childId) => props.nodeGraph[childId])
+      );
+
+      const curHistory = history();
+      setHistory([...curHistory, oldId]);
+
+      finalFocusedNode = childrenNodeIds[0];
+    }
+
+    setCurrentNodeId(finalFocusedNode);
+
+    // Moves screen reader focus
+    setTimeout(() => {
+      const newNode = document.getElementById(`info-${finalFocusedNode}`);
+
+      if (newNode) {
+        if (!newNode.hasAttribute("tabindex")) {
+          newNode.setAttribute("tabindex", "0");
+        }
+        newNode.focus();
+      }
+    }, 0);
+  };
+
   const currentNode = createMemo(() => {
     if (currentNodeId() !== null) {
       return props.nodeGraph[currentNodeId()!];
@@ -52,261 +132,55 @@ export function TraversalOutputComponentKeyboardParentFocus(
     }
   };
 
-  const handleNodeClick = (
-    oldId: string,
-    newId: string,
-    isFocusedParent?: boolean
-  ) => {
-    // 4 possibilities for clicking on current node
-    // 1. Click on an adjacent node (sibling), then focus moves to that sibling node; update history to be on that node
-    // 2. Click on the current focused node; same as pressing enter on this node, add to history and make it become focused parent
-    // 3. Click on parent focus; same as going up to parent
-    // 4. Clicking on node in parent context; same as switching parent context (by pressing P)
-
-    if (oldId === "-1" || newId === "-1" || !oldId || !newId) {
-      return;
-    }
-
-    const newNodeSiblings = findSiblingOfFocusedParent(oldId);
-    let finalFocusedNode = newId;
-
-    if (newNodeSiblings.includes(newId)) {
-      // Case 1
-      const curHistory = history();
-      curHistory.pop();
-      setHistory([...curHistory, newId]);
-    } else if (newId === oldId) {
-      // Case 2
-      const childrenNodes = props.nodeGraph[newId].children;
-      if (childrenNodes.length > 0) {
-        // If node has children, then focus on first child
-        const firstChildId = childrenNodes[0];
-        setHistory([...history(), firstChildId]);
-        finalFocusedNode = firstChildId;
-      }
-    } else if (
-      props.nodeGraph[oldId].parents.includes(newId) &&
-      isFocusedParent
-    ) {
-      // Case 3
-      // If new node is a parent of the old node
-      // Then use the default path to the new node as new history
-      const defaultPath = defaultPaths().get(newId);
-      setHistory([...(defaultPath ?? ["0"])]);
-    } else if (
-      props.nodeGraph[oldId].parents.includes(newId) &&
-      !isFocusedParent
-    ) {
-      // Case 4
-      const curHistory = history();
-      curHistory.pop();
-      curHistory.pop();
-      setHistory([...curHistory, newId, oldId]);
-      finalFocusedNode = oldId;
-    }
-
-    setCurrentNodeId(finalFocusedNode);
-
-    // Moves screen reader focus
-    setTimeout(() => {
-      const newNode = document.getElementById(`info-${finalFocusedNode}`);
-
-      if (newNode) {
-        if (!newNode.hasAttribute("tabindex")) {
-          newNode.setAttribute("tabindex", "0");
-        }
-        newNode.focus();
-      }
-    }, 0);
-  };
   const handleKeyPress = (event: KeyboardEvent) => {
     if (event.key === "ArrowUp" && event.shiftKey) {
-      // current on one of the nodes/home
-      // two options: go straight to parent in focus if only 1 parent
-      // or option to select which parent
-
-      // currently on one of the parent nodes
-      // select parent node - edge case if there's 1 or 2 nodes in history list
+      // Finds current focused element, then
+      // Shift + Arrow Up effectively clicks on "belongs to" button for current focused element
 
       const focusedElement = document.activeElement as HTMLElement;
       const focusedElementId = focusedElement?.id;
-      const historyList = history();
 
-      // Select current parent node in focus
-      if (focusedElementId === "parents-group") {
-        console.log("trying to select current parent node in focus");
-        if (historyList.length == 2) {
-          // First level child going back to root node
-          const curNodeId = historyList.pop();
-          const previousNodeId = historyList[historyList.length - 1];
-          if (previousNodeId) {
-            setHistory([...historyList]); // Update history without the last node
-            setCurrentNodeId(previousNodeId);
+      const nodeId = focusedElementId.split("-")[1];
 
-            const previousNodeElement = document.getElementById(
-              `info-${previousNodeId}`
-            );
-            if (previousNodeElement) {
-              previousNodeElement.focus();
-            }
-          }
-        } else if (historyList.length > 2) {
-          // At any other node - might take alternate path up and need to calculate default path
-
-          const curNodeId = historyList.pop();
-          const parentNodeId = historyList[historyList.length - 1];
-          const grandParentNodeId = historyList[historyList.length - 2];
-
-          if (
-            grandParentNodeId &&
-            props.nodeGraph[parentNodeId!].parents.includes(grandParentNodeId)
-          ) {
-            setHistory([...historyList]);
-            setCurrentNodeId(parentNodeId);
-          } else {
-            // update history to be default path up to parent node
-            const defaultPath = defaultPaths().get(parentNodeId!);
-            setHistory([...(defaultPath ?? ["0"])]);
-            setCurrentNodeId(parentNodeId);
-          }
-
-          const parentNodeElement = document.getElementById(
-            `info-${parentNodeId}`
-          );
-
-          if (parentNodeElement) {
-            parentNodeElement.focus();
-          }
-        } else {
-          // At root node - only 1 node in history and cannot select/go-up
-          const parentSection = document.getElementById(`parents-group`);
-          parentSection?.focus();
-        }
-      } else if (focusedElementId.startsWith("context-")) {
-        console.log("trying to select new node in focus");
-        // Select new parent node in focus
-
-        const curNodeId = historyList.pop();
-        const oldParentNode = historyList.pop();
-        const parentNodeId = focusedElementId.split("-")[3];
-        const grandParentNodeId = historyList[historyList.length - 1];
-
-        if (
-          grandParentNodeId &&
-          props.nodeGraph[parentNodeId!].parents.includes(grandParentNodeId)
-        ) {
-          setHistory([...historyList, parentNodeId]);
-          setCurrentNodeId(parentNodeId);
-        } else {
-          // update history to be default path up to parent node
-          const defaultPath = defaultPaths().get(parentNodeId!);
-          setHistory([...(defaultPath ?? ["0"])]);
-          setCurrentNodeId(parentNodeId);
-        }
-
-        const parentNodeElement = document.getElementById(
-          `info-${parentNodeId}`
+      if (focusedElementId.startsWith("info-")) {
+        const parentButton = document.getElementById(
+          `node-${nodeId}-belongsto`
         );
-
-        if (parentNodeElement) {
-          parentNodeElement.focus();
+        if (parentButton) {
+          parentButton.click();
         }
       } else {
-        // From adjacent nodes, either go up to parent in focus (if only 1 parent)
-        // Or allow user to select new parent to focus on
-
-        const numParents =
-          props.nodeGraph[historyList[historyList.length - 1]].parents.length;
-
-        if (numParents === 1) {
-          if (historyList.length == 2) {
-            // First level child going back to root node
-            const curNodeId = historyList.pop();
-            const previousNodeId = historyList[historyList.length - 1];
-            if (previousNodeId) {
-              setHistory([...historyList]); // Update history without the last node
-              setCurrentNodeId(previousNodeId);
-
-              const previousNodeElement = document.getElementById(
-                `info-${previousNodeId}`
-              );
-              if (previousNodeElement) {
-                previousNodeElement.focus();
-              }
-            }
-          } else if (historyList.length > 2) {
-            // At any other node - might take alternate path up and need to calculate default path
-
-            const curNodeId = historyList.pop();
-            const parentNodeId = historyList[historyList.length - 1];
-            const grandParentNodeId = historyList[historyList.length - 2];
-
-            if (
-              grandParentNodeId &&
-              props.nodeGraph[parentNodeId!].parents.includes(grandParentNodeId)
-            ) {
-              setHistory([...historyList]);
-              setCurrentNodeId(parentNodeId);
-            } else {
-              // update history to be default path up to parent node
-              const defaultPath = defaultPaths().get(parentNodeId!);
-              setHistory([...(defaultPath ?? ["0"])]);
-              setCurrentNodeId(parentNodeId);
-            }
-
-            const parentNodeElement = document.getElementById(
-              `info-${parentNodeId}`
-            );
-
-            if (parentNodeElement) {
-              parentNodeElement.focus();
-            }
-          } else {
-            // At root node - only 1 node in history and cannot select/go-up
-            const parentSection = document.getElementById(`parents-group`);
-            parentSection?.focus();
-          }
-        } else {
-          const currentParentNode = document.getElementById(`parents-group`);
-          currentParentNode?.focus();
-        }
+        event.preventDefault();
       }
 
       event.preventDefault();
     } else if (event.key === "ArrowDown" && event.shiftKey) {
+      // Shift + Arrow Down effectively clicks on "contains" button for current focused element
+
       const focusedElement = document.activeElement as HTMLElement;
       const focusedElementId = focusedElement?.id;
+      const nodeId = focusedElementId.split("-")[1];
 
-      if (focusedElementId.startsWith("parents")) {
-        const currentNode = document.getElementById(`info-${currentNodeId()}`);
-        if (currentNode) {
-          currentNode.focus();
+      if (focusedElementId.startsWith("info-")) {
+        const childrenButton = document.getElementById(
+          `node-${nodeId}-contains`
+        );
+        if (childrenButton) {
+          childrenButton.click();
         }
       } else {
-        // Directly navigate to first child if children exist
-        // If not, then select entire group and announce that no children exist
-        const firstChildId = props.nodeGraph[currentNodeId()!].children[0];
-        if (firstChildId) {
-          // update history list with traversed children node
-          setHistory((prev) => [...prev, firstChildId]);
-
-          setCurrentNodeId(firstChildId);
-
-          const newSection = document.getElementById(`info-${firstChildId}`);
-          if (newSection) {
-            newSection.focus();
-          }
-        }
+        event.preventDefault();
       }
+
       event.preventDefault();
     } else if (event.key === "h") {
       const titleSection = document.getElementById(`home`);
 
       const lastNodeId = history()[history().length - 1];
-      const lastNodeButton = document.getElementById(`info-${lastNodeId}`);
+      const lastNodeElement = document.getElementById(`info-${lastNodeId}`);
 
-      if (lastNodeButton) {
-        lastNodeButton.focus();
+      if (lastNodeElement) {
+        lastNodeElement.focus();
       } else {
         titleSection?.focus();
       }
@@ -382,7 +256,6 @@ export function TraversalOutputComponentKeyboardParentFocus(
 
         const currentIndex = contextElms.indexOf(focusedElement);
         let newIndex = currentIndex;
-        console.log(currentIndex);
 
         if (
           (event.key === "ArrowLeft" || event.key === "ArrowUp") &&
@@ -473,10 +346,7 @@ export function TraversalOutputComponentKeyboardParentFocus(
   return (
     <Show when={currentNodeId()}>
       <HypergraphNodeComponentKeyboardOnly
-        history={history()}
-        parentFocusId={
-          history().length > 1 ? history()[history().length - 2] : "-1"
-        }
+        displayedNodes={displayedNodes()}
         node={currentNode()}
         nodeGraph={props.nodeGraph}
         onNodeClick={handleNodeClick}
@@ -485,138 +355,46 @@ export function TraversalOutputComponentKeyboardParentFocus(
   );
 }
 
-/**
- * Component to output a single node in the hypergraph
- * Screen reader output for single node in traversal structure
- */
 export function HypergraphNodeComponentKeyboardOnly(
   props: HypergraphNodeProps
 ) {
-  // based on the parent node in focus, siblings are the child nodes of that parent
-  // history can be found as props.history
-  function findSiblings(currentId: string) {
-    if (props.history.length == 1) {
-      return [currentId];
-    } else {
-      const parentFocus = props.history[props.history.length - 2];
-      const siblings = props.nodeGraph[parentFocus].children;
-      return siblings;
-    }
-  }
-
-  const sortAdjacents = createMemo(() => {
-    const adjacentNodeIds = findSiblings(props.node.id);
-
-    const adjacentNodes = Array.from(adjacentNodeIds)
-      .map((nodeId) => props.nodeGraph[nodeId])
-      .sort((a, b) => {
-        // First, sort by priority (high to low)
-        const priorityDifference = a.priority - b.priority;
-        if (priorityDifference !== 0) {
-          return priorityDifference;
-        }
-        // If priorities are the same, sort by ID (lexicographical order)
-        return Number(a.id) - Number(b.id);
-      });
-
-    return adjacentNodes;
-  });
-
-  const nonFocusedParentIds = createMemo(() => {
-    const parentIds = props.node.parents;
-
-    // Root node - has no parents, so no non-focused parents
-    if (props.history.length == 1) {
-      return [];
-    }
-    const nonFocusedParents = parentIds.filter(
-      (parentId) => parentId !== props.parentFocusId
-    );
-
-    return nonFocusedParents;
-  });
-
-  const nonFocusedParents = createMemo(() => {
-    return nonFocusedParentIds().map((parentId) => props.nodeGraph[parentId]);
-  });
-
   return (
     <div>
-      <ul
-        id="parents-group"
-        tabindex="0"
-        aria-label={
-          nonFocusedParentIds().length === 0
-            ? `${
-                props.parentFocusId === "-1"
-                  ? "No current groupings."
-                  : `Currently grouping by ${
-                      props.nodeGraph[props.parentFocusId].displayName
-                    }. `
-              } ${props.node.displayName} belongs to 0 additional groups.`
-            : `Currently grouping by ${
-                props.nodeGraph[props.parentFocusId].displayName
-              }. ${props.node.displayName} belongs to ${
-                nonFocusedParentIds().length
-              } additional groups. Use arrow and enter keys to make selection.`
-        }
-      >
-        <span
-          aria-hidden={true}
-          style={{ "font-weight": "bold" }}
-          onClick={() =>
-            props.onNodeClick(props.node.id, props.parentFocusId, true)
-          }
-        >
-          {props.node.displayName} belongs to{" "}
-          {props.parentFocusId === "-1"
-            ? "no groups"
-            : props.nodeGraph[props.parentFocusId].displayName}
-        </span>
-      </ul>
-
-      <ul tabindex="0" id="option-nodes">
-        <For each={nonFocusedParents()}>
-          {(parent, idx) => (
-            <li
-              id={`context-${props.node.id}-${idx()}-${parent.id}`}
-              aria-label={`${idx() + 1} of ${nonFocusedParentIds().length}. ${
-                parent.displayName
-              } group. Press Enter to select this grouping.`}
-              onClick={() => props.onNodeClick(props.node.id, parent.id, false)}
-              tabIndex="0"
-            >
-              <span aria-hidden="true">{parent.displayName} group</span>
-            </li>
-          )}
-        </For>
-      </ul>
-      <br />
-
       <ul id="home" tabindex="0" aria-live="assertive">
         <For
-          each={sortAdjacents()}
+          each={props.displayedNodes}
           fallback={<li style={{ color: "grey" }}>None</li>}
         >
-          {(adjacent, idx) => (
+          {(node) => (
             <li
-              aria-label={`${idx() + 1} of ${sortAdjacents().length}. ${
-                adjacent.displayName
-              }; ${adjacent.descriptionTokens?.longDescription}`}
-              id={`info-${adjacent.id}`}
-              onClick={() => props.onNodeClick(props.node.id, adjacent.id)}
+              id={`info-${node.id}`}
               tabindex="0"
+              aria-label={`Node ${node.displayName}, ${node.descriptionTokens?.longDescription} Press shift down arrow view children or shift up arrow view parents.`}
             >
-              <span aria-hidden="true">{`${adjacent.displayName}; ${adjacent.descriptionTokens?.longDescription}`}</span>
+              <span>
+                {node.displayName}: {node.descriptionTokens?.longDescription}
+              </span>
+              <button
+                aria-label={`Contains button for ${node.displayName}. Press to navigate to its children.`}
+                onClick={() =>
+                  props.onNodeClick(node.id, `node-${node.id}-contains`)
+                }
+                id={`node-${node.id}-contains`}
+              >
+                Contains
+              </button>
+              <button
+                aria-label={`Belongs To button for ${node.displayName}. Press to navigate to its parents.`}
+                onClick={() =>
+                  props.onNodeClick(node.id, `node-${node.id}-belongsto`)
+                }
+                id={`node-${node.id}-belongsto`}
+              >
+                Belongs To
+              </button>
             </li>
           )}
         </For>
-      </ul>
-
-      <ul id="undo-text" tabindex="0" aria-label="Pressing Undo">
-        <span style={{ "font-weight": "bold" }} aria-hidden={true}>
-          Pressing Undo
-        </span>
       </ul>
     </div>
   );
