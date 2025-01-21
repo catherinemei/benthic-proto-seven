@@ -365,11 +365,13 @@ export function HypergraphNodeComponentKeyboardOnly(
           each={props.displayedNodes}
           fallback={<li style={{ color: "grey" }}>None</li>}
         >
-          {(node) => (
+          {(node, idx) => (
             <li
               id={`info-${node.id}`}
               tabindex="0"
-              aria-label={`Node ${node.displayName}, ${node.descriptionTokens?.longDescription} Press shift down arrow view children or shift up arrow view parents.`}
+              aria-label={`${idx() + 1} of ${props.displayedNodes.length}.  ${
+                node.displayName
+              }; ${node.descriptionTokens?.longDescription}`}
             >
               <span>
                 {node.displayName}: {node.descriptionTokens?.longDescription}
